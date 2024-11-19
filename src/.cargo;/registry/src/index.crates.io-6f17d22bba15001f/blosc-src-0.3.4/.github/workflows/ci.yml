@@ -1,0 +1,44 @@
+name: CI
+
+on:
+  push:
+    branches:
+    - main
+  pull_request:
+    branches:
+    - main
+  schedule:
+  - cron: '0 0 15 * *'
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  main:
+    name: main ci
+    runs-on: ${{matrix.os}}-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {os: ubuntu, rust: stable}
+          - {os: windows, rust: stable-msvc}
+          - {os: windows, rust: stable-gnu}
+          - {os: macos, rust: stable}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: true
+      - name: Install Rust (${{matrix.rust}})
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: '${{matrix.rust}}'
+      - name: Build and test
+        run: cargo test
+      - name: Build and test (all features)
+        run: cargo test --all-features
+      - name: Build and test (all features, simd)
+        env:
+          RUSTFLAGS: "-C target-feature=+sse2,+avx2"
+        run: cargo test --all-features

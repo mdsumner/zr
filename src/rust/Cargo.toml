@@ -1,0 +1,14 @@
+[package]
+name = 'zr'
+version = '0.1.0'
+edition = '2021'
+
+[lib]
+crate-type = [ 'staticlib' ]
+name = 'zr'
+
+[dependencies]
+extendr-api = '*'
+zarrs = '*'
+zarrs_filesystem = "0.1.0"
+zarrs_storage = "0.2.2"

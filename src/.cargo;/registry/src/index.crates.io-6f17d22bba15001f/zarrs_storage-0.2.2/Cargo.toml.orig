@@ -1,0 +1,33 @@
+[package]
+name = "zarrs_storage"
+version = "0.2.2"
+authors = ["Lachlan Deakin <ljdgit@gmail.com>"]
+edition = "2021"
+rust-version = "1.76"
+description = "The storage API and default stores for the zarrs crate"
+documentation = "https://docs.rs/zarrs_storage"
+repository = "https://github.com/LDeakin/zarrs"
+license = "MIT OR Apache-2.0"
+keywords = ["zarr", "zarrs", "storage", "store"]
+categories = ["encoding"]
+
+[features]
+async = ["dep:async-trait", "dep:futures"] # Enable the experimental async API
+tests = [] # Enable testing functions
+
+[package.metadata.docs.rs]
+all-features = true
+
+[dependencies]
+async-trait = { version = "0.1.74", optional = true }
+bytes = "1.6.0"
+derive_more = { version = "1.0.0", features = ["deref", "display", "from"] }
+futures = { version = "0.3.29", optional = true }
+itertools = "0.13.0"
+parking_lot = "0.12.0"
+thiserror = "1.0.61"
+unsafe_cell_slice = "0.1.0"
+
+[dev-dependencies]
+chrono = "0.4"
+tempfile = "3"
