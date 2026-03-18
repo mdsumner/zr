@@ -11,6 +11,7 @@ name = "zr"
 extendr-api = "0.8"
 zarrs = { version = "0.23", features = ["ndarray", "filesystem", "async", "gzip", "blosc", "zstd", "sharding"] }
 zarrs_object_store = "0.6"
+zarrs_http = "0.3"
 object_store = { version = "0.13", features = ["http", "aws"] }
 tokio = { version = "1", features = ["rt-multi-thread"] }
 serde_json = "1"

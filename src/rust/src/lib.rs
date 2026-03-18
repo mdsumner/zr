@@ -63,26 +63,14 @@ impl ZrStore {
         Ok(Self { inner: store, path: path.to_string(), writable: true })
     }
 
-    /// Open a remote HTTP store via object_store (read-only)
+    /// Open a remote HTTP store for reading zarr via simple GET requests.
+    /// This works with any HTTP server — no WebDAV/PROPFIND needed.
+    /// Note: listing (zr_nodes) is not supported; use zr_array() directly.
     fn new_http(url: &str) -> extendr_api::Result<Self> {
-        let runtime = get_tokio_runtime()?;
-
-        let client_options = object_store::ClientOptions::new()
-            .with_allow_http(true);
-
-        let os = object_store::http::HttpBuilder::new()
-            .with_url(url)
-            .with_client_options(client_options)
-            .build()
+        let http_store = zarrs_http::HTTPStore::new(url)
             .map_err(|e| Error::Other(format!("cannot create HTTP store '{}': {}", url, e)))?;
-
-        let async_store = Arc::new(AsyncObjectStore::new(Arc::new(os)));
-        let block_on = TokioBlockOn(runtime);
-        let sync_store: ReadableWritableListableStorage = Arc::new(
-            AsyncToSyncStorageAdapter::new(async_store, block_on)
-        );
-
-        Ok(Self { inner: sync_store, path: url.to_string(), writable: false })
+        let store: ReadableWritableListableStorage = Arc::new(http_store);
+        Ok(Self { inner: store, path: url.to_string(), writable: false })
     }
 
     /// Open an S3 store via object_store (read-only, uses env credentials)
@@ -94,7 +82,7 @@ impl ZrStore {
             .build()
             .map_err(|e| Error::Other(format!("cannot create S3 store '{}': {}", url, e)))?;
 
-        let async_store = Arc::new(AsyncObjectStore::new(Arc::new(os)));
+        let async_store = Arc::new(AsyncObjectStore::new(os));
         let block_on = TokioBlockOn(runtime);
         let sync_store: ReadableWritableListableStorage = Arc::new(
             AsyncToSyncStorageAdapter::new(async_store, block_on)
