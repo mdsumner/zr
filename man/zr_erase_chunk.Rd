@@ -4,13 +4,15 @@
 \alias{zr_erase_chunk}
 \title{Erase a chunk}
 \usage{
-zr_erase_chunk(arr, chunk_index)
+zr_erase_chunk(store, arr, chunk_index)
 }
 \arguments{
+\item{store}{A ZrStore (must be writable — filesystem only).}
+
 \item{arr}{A ZrArray.}
 
 \item{chunk_index}{Numeric vector of chunk indices (0-based).}
 }
 \description{
-Erase a chunk
+Erases on local filesystem stores only. Remote stores are read-only.
 }

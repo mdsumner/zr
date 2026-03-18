@@ -47,7 +47,7 @@ test_that("2D write/read roundtrip with correct orientation", {
 
   ## Write C-contiguous data: row0 = 1:4, row1 = 5:8, row2 = 9:12
   vals <- as.double(1:12)
-  zr_write(arr, vals, offset = c(0, 0), count = c(3, 4))
+  zr_write(s, arr, vals, offset = c(0, 0), count = c(3, 4))
 
   ## Read back — should get a 3x4 matrix oriented for ximage/rasterImage
   m <- zr_read(arr)
@@ -73,7 +73,7 @@ test_that("subset read", {
 
   arr <- zr_create_array(s, "/sub", shape = c(4, 6), chunks = c(2, 3),
                          dtype = "float64", fill_value = 0)
-  zr_write(arr, as.double(1:24), offset = c(0, 0), count = c(4, 6))
+  zr_write(s, arr, as.double(1:24), offset = c(0, 0), count = c(4, 6))
 
   ## Read a 2x3 subset starting at (1, 2)
   m <- zr_read(arr, offset = c(1, 2), count = c(2, 3))
@@ -93,7 +93,7 @@ test_that("1D array returns plain vector", {
 
   arr <- zr_create_array(s, "/vec", shape = 10, chunks = 5,
                          dtype = "float64", fill_value = 0)
-  zr_write(arr, as.double(1:10), offset = 0, count = 10)
+  zr_write(s, arr, as.double(1:10), offset = 0, count = 10)
   v <- zr_read(arr)
   expect_equal(v, as.double(1:10))
   expect_null(dim(v))
@@ -109,7 +109,7 @@ test_that("int32 roundtrip", {
 
   arr <- zr_create_array(s, "/ints", shape = c(3, 4), chunks = c(3, 4),
                          dtype = "int32", fill_value = -999)
-  zr_write(arr, 1:12, offset = c(0, 0), count = c(3, 4))
+  zr_write(s, arr, 1:12, offset = c(0, 0), count = c(3, 4))
   m <- zr_read(arr)
   expect_true(is.integer(m))
   expect_equal(m[1, ], 1:4)
@@ -126,7 +126,7 @@ test_that("float32 roundtrip (promoted to double)", {
 
   arr <- zr_create_array(s, "/f32", shape = c(2, 3), chunks = c(2, 3),
                          dtype = "float32", fill_value = 0)
-  zr_write(arr, c(1.5, 2.5, 3.5, 4.5, 5.5, 6.5), offset = c(0, 0), count = c(2, 3))
+  zr_write(s, arr, c(1.5, 2.5, 3.5, 4.5, 5.5, 6.5), offset = c(0, 0), count = c(2, 3))
   m <- zr_read(arr)
   expect_true(is.double(m))
   expect_equal(m[1, 1], 1.5, tolerance = 1e-6)
@@ -143,7 +143,7 @@ test_that("chunk read/write roundtrip", {
   arr <- zr_create_array(s, "/chunked", shape = c(4, 6), chunks = c(2, 3),
                          dtype = "float64", fill_value = NaN)
   chunk_data <- as.double(101:106)
-  zr_write_chunk(arr, chunk_data, chunk_index = c(0, 0))
+  zr_write_chunk(s, arr, chunk_data, chunk_index = c(0, 0))
   got <- zr_read_chunk(arr, c(0, 0))
   expect_equal(got, chunk_data)
 
@@ -158,8 +158,8 @@ test_that("erase chunk", {
 
   arr <- zr_create_array(s, "/eraseme", shape = c(4, 4), chunks = c(2, 2),
                          dtype = "float64", fill_value = -1)
-  zr_write_chunk(arr, rep(99, 4), chunk_index = c(0, 0))
-  zr_erase_chunk(arr, c(0, 0))
+  zr_write_chunk(s, arr, rep(99, 4), chunk_index = c(0, 0))
+  zr_erase_chunk(s, arr, c(0, 0))
   ## After erase, reading should give fill values
   m <- zr_read(arr, offset = c(0, 0), count = c(2, 2))
   expect_true(all(m == -1))

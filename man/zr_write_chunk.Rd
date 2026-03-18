@@ -4,9 +4,11 @@
 \alias{zr_write_chunk}
 \title{Write data to a chunk}
 \usage{
-zr_write_chunk(arr, data, chunk_index)
+zr_write_chunk(store, arr, data, chunk_index)
 }
 \arguments{
+\item{store}{A ZrStore (must be writable — filesystem only).}
+
 \item{arr}{A ZrArray.}
 
 \item{data}{Numeric or integer vector.}
@@ -14,5 +16,5 @@ zr_write_chunk(arr, data, chunk_index)
 \item{chunk_index}{Numeric vector of chunk indices (0-based).}
 }
 \description{
-Write data to a chunk
+Writes to local filesystem stores only. Remote stores are read-only.
 }

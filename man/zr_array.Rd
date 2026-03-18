@@ -7,7 +7,8 @@
 zr_array(store, path)
 }
 \arguments{
-\item{store}{A ZrStore (from \code{\link[=zr_store]{zr_store()}}).}
+\item{store}{A ZrStore (from \code{\link[=zr_store]{zr_store()}}, \code{\link[=zr_http_store]{zr_http_store()}}, or
+\code{\link[=zr_s3_store]{zr_s3_store()}}).}
 
 \item{path}{Character, path within the store (e.g. \code{"/temperature"}).}
 }

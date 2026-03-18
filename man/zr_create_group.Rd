@@ -7,7 +7,7 @@
 zr_create_group(store, path = "/")
 }
 \arguments{
-\item{store}{A ZrStore.}
+\item{store}{A ZrStore (must be writable — filesystem only).}
 
 \item{path}{Character, group path within the store.}
 }

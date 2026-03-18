@@ -13,7 +13,9 @@ zr_s3_store(url)
 A ZrStore object (external pointer, read-only).
 }
 \description{
-Opens a read-only zarr store from an S3 bucket. Credentials are
-read from the environment (AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY,
-AWS_DEFAULT_REGION, etc.).
+Opens a read-only zarr store from an S3-compatible bucket. Credentials
+are read from the environment (\code{AWS_ACCESS_KEY_ID},
+\code{AWS_SECRET_ACCESS_KEY}, \code{AWS_DEFAULT_REGION}, etc.). For anonymous
+access to public buckets, set \code{AWS_ACCESS_KEY_ID=""} and
+\code{AWS_SECRET_ACCESS_KEY=""}.
 }

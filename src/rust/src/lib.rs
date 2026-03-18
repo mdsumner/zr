@@ -7,44 +7,50 @@ use zarrs::array::data_type;
 use zarrs::filesystem::FilesystemStore;
 use zarrs::group::{Group, GroupBuilder};
 use zarrs::storage::{
-    ReadableWritableListableStorage, ReadableWritableListableStorageTraits,
+    ReadableWritableListableStorage,
     ReadableStorage, ReadableStorageTraits,
 };
+
+#[cfg(feature = "remote")]
 use zarrs::storage::storage_adapter::async_to_sync::{
     AsyncToSyncStorageAdapter, AsyncToSyncBlockOn,
 };
+#[cfg(feature = "remote")]
 use zarrs_object_store::AsyncObjectStore;
 
 // ---------------------------------------------------------------------------
-// Tokio runtime
+// Tokio runtime (only with remote feature)
 // ---------------------------------------------------------------------------
 
+#[cfg(feature = "remote")]
 struct TokioBlockOn(tokio::runtime::Runtime);
 
+#[cfg(feature = "remote")]
 impl AsyncToSyncBlockOn for TokioBlockOn {
     fn block_on<F: core::future::Future>(&self, future: F) -> F::Output {
         self.0.block_on(future)
     }
 }
 
-fn get_tokio_runtime() -> extendr_api::Result<tokio::runtime::Runtime> {
+#[cfg(feature = "remote")]
+fn new_tokio_runtime() -> extendr_api::Result<tokio::runtime::Runtime> {
     tokio::runtime::Runtime::new()
         .map_err(|e| Error::Other(format!("cannot create tokio runtime: {}", e)))
 }
 
 // ---------------------------------------------------------------------------
-// Store — uses ReadableWritableListableStorage for filesystem,
-//         which is also readable+listable for read-only operations.
-//         Remote stores get wrapped async→sync into this same type
-//         where possible, or we use a read-only variant.
+// Store
+//
+//   readable  — universal, all store types (Array/Group opens + reads)
+//   writable  — Option, filesystem only (writes + creates)
+//   listable  — bool, true for filesystem (future: S3)
 // ---------------------------------------------------------------------------
 
 #[extendr]
 struct ZrStore {
-    /// Read-only handle — works for all store types
     readable: ReadableStorage,
-    /// Read-write-listable handle — only for filesystem stores
     writable: Option<ReadableWritableListableStorage>,
+    listable: bool,
     path: String,
 }
 
@@ -56,7 +62,7 @@ impl std::fmt::Debug for ZrStore {
 
 #[extendr]
 impl ZrStore {
-    /// Open a local filesystem store (read-write)
+    /// Open a local filesystem store (read-write-listable)
     fn new(path: &str) -> extendr_api::Result<Self> {
         let store_path: PathBuf = path.into();
         let store: ReadableWritableListableStorage =
@@ -64,45 +70,62 @@ impl ZrStore {
                 .map_err(|e| Error::Other(format!("cannot open store '{}': {}", path, e)))?);
         Ok(Self {
             readable: store.clone() as ReadableStorage,
+            listable: true,
             writable: Some(store),
             path: path.to_string(),
         })
     }
 
-    /// Open a remote HTTP store for reading zarr via simple GET requests.
-    /// Works with any HTTP server — no WebDAV/PROPFIND needed.
-    /// Listing (zr_nodes) is not supported; use zr_array() directly.
+    /// Open a remote HTTP store (read-only, simple GET, no WebDAV).
     fn new_http(url: &str) -> extendr_api::Result<Self> {
-        let http_store = zarrs_http::HTTPStore::new(url)
-            .map_err(|e| Error::Other(format!("cannot create HTTP store '{}': {}", url, e)))?;
-        let store: ReadableStorage = Arc::new(http_store);
-        Ok(Self {
-            readable: store,
-            writable: None,
-            path: url.to_string(),
-        })
+        #[cfg(feature = "remote")]
+        {
+            let http_store = zarrs_http::HTTPStore::new(url)
+                .map_err(|e| Error::Other(format!("cannot create HTTP store '{}': {}", url, e)))?;
+            let store: ReadableStorage = Arc::new(http_store);
+            Ok(Self {
+                readable: store,
+                writable: None,
+                listable: false,
+                path: url.to_string(),
+            })
+        }
+        #[cfg(not(feature = "remote"))]
+        {
+            let _ = url;
+            Err(Error::Other("HTTP stores require the 'remote' feature (recompile with ZR_FEATURES=remote)".to_string()))
+        }
     }
 
-    /// Open an S3 store via object_store (read-only, uses env credentials)
+    /// Open an S3 store via object_store (read-only, env credentials).
     fn new_s3(url: &str) -> extendr_api::Result<Self> {
-        let runtime = get_tokio_runtime()?;
+        #[cfg(feature = "remote")]
+        {
+            let runtime = new_tokio_runtime()?;
 
-        let os = object_store::aws::AmazonS3Builder::from_env()
-            .with_url(url)
-            .build()
-            .map_err(|e| Error::Other(format!("cannot create S3 store '{}': {}", url, e)))?;
+            let os = object_store::aws::AmazonS3Builder::from_env()
+                .with_url(url)
+                .build()
+                .map_err(|e| Error::Other(format!("cannot create S3 store '{}': {}", url, e)))?;
 
-        let async_store = Arc::new(AsyncObjectStore::new(os));
-        let block_on = TokioBlockOn(runtime);
-        let sync_store = Arc::new(
-            AsyncToSyncStorageAdapter::new(async_store, block_on)
-        );
+            let async_store = Arc::new(AsyncObjectStore::new(os));
+            let block_on = TokioBlockOn(runtime);
+            let sync_store = Arc::new(
+                AsyncToSyncStorageAdapter::new(async_store, block_on)
+            );
 
-        Ok(Self {
-            readable: sync_store.clone() as ReadableStorage,
-            writable: None,
-            path: url.to_string(),
-        })
+            Ok(Self {
+                readable: sync_store.clone() as ReadableStorage,
+                writable: None,
+                listable: false,
+                path: url.to_string(),
+            })
+        }
+        #[cfg(not(feature = "remote"))]
+        {
+            let _ = url;
+            Err(Error::Other("S3 stores require the 'remote' feature (recompile with ZR_FEATURES=remote)".to_string()))
+        }
     }
 
     fn path(&self) -> &str {
@@ -111,6 +134,10 @@ impl ZrStore {
 
     fn is_writable(&self) -> bool {
         self.writable.is_some()
+    }
+
+    fn is_listable(&self) -> bool {
+        self.listable
     }
 }
 
@@ -146,7 +173,6 @@ impl ZrGroup {
             .map_err(|e| Error::Other(format!("cannot create group '{}': {}", path, e)))?;
         group.store_metadata()
             .map_err(|e| Error::Other(format!("cannot store group metadata: {}", e)))?;
-        // Re-open with readable storage so the type matches ZrGroup.inner
         let group = Group::open(store.readable.clone(), path)
             .map_err(|e| Error::Other(format!("cannot reopen group '{}': {}", path, e)))?;
         Ok(Self { inner: group, path: path.to_string() })
@@ -177,21 +203,20 @@ impl std::fmt::Debug for ZrArray {
     }
 }
 
-/// Classify a zarrs DataType into read/write families for R dispatch.
-/// In zarrs 0.23, DataType is a trait object (Arc<dyn DataTypeExtension>),
-/// not an enum. We compare against the known factory instances.
-fn dtype_family(dt: &zarrs::array::DataType) -> &'static str {
-    if *dt == data_type::float64() { return "f64"; }
-    if *dt == data_type::float32() { return "f32"; }
-    if *dt == data_type::int32()   { return "i32"; }
-    if *dt == data_type::int16()   { return "i16"; }
-    if *dt == data_type::int8()    { return "i8"; }
-    if *dt == data_type::uint8()   { return "u8"; }
-    if *dt == data_type::uint16()  { return "u16"; }
-    if *dt == data_type::uint32()  { return "u32"; }
-    if *dt == data_type::int64()   { return "i64"; }
-    if *dt == data_type::uint64()  { return "u64"; }
-    "f64"  // fallback: attempt f64 read
+/// Classify a zarrs DataType for R type dispatch.
+/// Returns None for unsupported types (string, vlen, compound, etc.)
+fn dtype_family(dt: &zarrs::array::DataType) -> Option<&'static str> {
+    if *dt == data_type::float64() { return Some("f64"); }
+    if *dt == data_type::float32() { return Some("f32"); }
+    if *dt == data_type::int32()   { return Some("i32"); }
+    if *dt == data_type::int16()   { return Some("i16"); }
+    if *dt == data_type::int8()    { return Some("i8"); }
+    if *dt == data_type::uint8()   { return Some("u8"); }
+    if *dt == data_type::uint16()  { return Some("u16"); }
+    if *dt == data_type::uint32()  { return Some("u32"); }
+    if *dt == data_type::int64()   { return Some("i64"); }
+    if *dt == data_type::uint64()  { return Some("u64"); }
+    None
 }
 
 #[extendr]
@@ -213,15 +238,10 @@ impl ZrArray {
         Ok(Self { inner: array, path: path.to_string() })
     }
 
-    // -- metadata ----------------------------------------------------------
-
-    /// Shape as f64 vector (preserves full u64 range in R numeric)
     fn shape(&self) -> Vec<f64> {
         self.inner.shape().iter().map(|&x| x as f64).collect()
     }
 
-    /// Chunk shape as f64 vector (element dimensions of a chunk, not the grid shape).
-    /// Returns the shape of the origin chunk, which is the regular chunk size.
     fn chunk_shape(&self) -> extendr_api::Result<Vec<f64>> {
         let ndim = self.inner.dimensionality();
         let origin: Vec<u64> = vec![0; ndim];
@@ -267,7 +287,7 @@ impl ZrArray {
         &self.path
     }
 
-    // -- unified read (returns Robj so R gets the right type) --------------
+    // -- read --------------------------------------------------------------
 
     fn read_subset_robj(&self, start: Vec<f64>, shape: Vec<f64>) -> extendr_api::Result<Robj> {
         let start_u64: Vec<u64> = start.iter().map(|&x| x as u64).collect();
@@ -284,191 +304,351 @@ impl ZrArray {
 
     fn read_chunk_robj(&self, chunk_index: Vec<f64>) -> extendr_api::Result<Robj> {
         let idx: Vec<u64> = chunk_index.iter().map(|&x| x as u64).collect();
-        let family = dtype_family(self.inner.data_type());
-        match family {
-            "f64" | "i64" | "u64" => {
-                let data: Vec<f64> = self.inner.retrieve_chunk(&idx)
-                    .map_err(|e| Error::Other(format!("chunk read error: {}", e)))?;
-                Ok(data.into_robj())
-            }
-            "f32" => {
-                let data: Vec<f32> = self.inner.retrieve_chunk(&idx)
-                    .map_err(|e| Error::Other(format!("chunk read error: {}", e)))?;
-                let doubles: Vec<f64> = data.into_iter().map(|x| x as f64).collect();
-                Ok(doubles.into_robj())
-            }
-            "i32" | "u32" => {
-                let data: Vec<i32> = self.inner.retrieve_chunk(&idx)
-                    .map_err(|e| Error::Other(format!("chunk read error: {}", e)))?;
-                Ok(data.into_robj())
-            }
-            "i16" | "u16" => {
-                let data: Vec<i16> = self.inner.retrieve_chunk(&idx)
-                    .map_err(|e| Error::Other(format!("chunk read error: {}", e)))?;
-                let ints: Vec<i32> = data.into_iter().map(|x| x as i32).collect();
-                Ok(ints.into_robj())
-            }
-            "i8" | "u8" => {
-                let data: Vec<u8> = self.inner.retrieve_chunk(&idx)
-                    .map_err(|e| Error::Other(format!("chunk read error: {}", e)))?;
-                let ints: Vec<i32> = data.into_iter().map(|x| x as i32).collect();
-                Ok(ints.into_robj())
-            }
-            _ => {
-                let data: Vec<f64> = self.inner.retrieve_chunk(&idx)
-                    .map_err(|e| Error::Other(format!("chunk read error: {}", e)))?;
-                Ok(data.into_robj())
-            }
+        let family = dtype_family(self.inner.data_type())
+            .ok_or_else(|| Error::Other(format!(
+                "unsupported data type: {}", self.inner.data_type()
+            )))?;
+
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| -> extendr_api::Result<Robj> {
+            read_chunk_typed(&self.inner, &idx, family)
+        }));
+
+        match result {
+            Ok(r) => r,
+            Err(_) => Err(Error::Other(format!(
+                "zarrs panic reading chunk from '{}'", self.path
+            ))),
         }
-    }
-
-    // -- write (type-dispatched) -------------------------------------------
-
-    fn write_subset_f64(&self, start: Vec<f64>, shape: Vec<f64>, data: Vec<f64>) -> extendr_api::Result<()> {
-        let start_u64: Vec<u64> = start.iter().map(|&x| x as u64).collect();
-        let shape_u64: Vec<u64> = shape.iter().map(|&x| x as u64).collect();
-        let subset = ArraySubset::new_with_start_shape(start_u64, shape_u64)
-            .map_err(|e| Error::Other(format!("invalid subset: {}", e)))?;
-        let family = dtype_family(self.inner.data_type());
-        match family {
-            "f32" => {
-                let data_f32: Vec<f32> = data.into_iter().map(|x| x as f32).collect();
-                self.inner.store_array_subset(&subset, &data_f32)
-                    .map_err(|e| Error::Other(format!("write error: {}", e)))?;
-            }
-            _ => {
-                self.inner.store_array_subset(&subset, &data)
-                    .map_err(|e| Error::Other(format!("write error: {}", e)))?;
-            }
-        }
-        Ok(())
-    }
-
-    fn write_subset_i32(&self, start: Vec<f64>, shape: Vec<f64>, data: Vec<i32>) -> extendr_api::Result<()> {
-        let start_u64: Vec<u64> = start.iter().map(|&x| x as u64).collect();
-        let shape_u64: Vec<u64> = shape.iter().map(|&x| x as u64).collect();
-        let subset = ArraySubset::new_with_start_shape(start_u64, shape_u64)
-            .map_err(|e| Error::Other(format!("invalid subset: {}", e)))?;
-        let family = dtype_family(self.inner.data_type());
-        match family {
-            "i16" | "u16" => {
-                let data_i16: Vec<i16> = data.into_iter().map(|x| x as i16).collect();
-                self.inner.store_array_subset(&subset, &data_i16)
-                    .map_err(|e| Error::Other(format!("write error: {}", e)))?;
-            }
-            "i8" | "u8" => {
-                let data_u8: Vec<u8> = data.into_iter().map(|x| x as u8).collect();
-                self.inner.store_array_subset(&subset, &data_u8)
-                    .map_err(|e| Error::Other(format!("write error: {}", e)))?;
-            }
-            _ => {
-                self.inner.store_array_subset(&subset, &data)
-                    .map_err(|e| Error::Other(format!("write error: {}", e)))?;
-            }
-        }
-        Ok(())
-    }
-
-    fn write_chunk_f64(&self, chunk_index: Vec<f64>, data: Vec<f64>) -> extendr_api::Result<()> {
-        let idx: Vec<u64> = chunk_index.iter().map(|&x| x as u64).collect();
-        let family = dtype_family(self.inner.data_type());
-        match family {
-            "f32" => {
-                let data_f32: Vec<f32> = data.into_iter().map(|x| x as f32).collect();
-                self.inner.store_chunk(&idx, &data_f32)
-                    .map_err(|e| Error::Other(format!("chunk write error: {}", e)))?;
-            }
-            _ => {
-                self.inner.store_chunk(&idx, &data)
-                    .map_err(|e| Error::Other(format!("chunk write error: {}", e)))?;
-            }
-        }
-        Ok(())
-    }
-
-    fn write_chunk_i32(&self, chunk_index: Vec<f64>, data: Vec<i32>) -> extendr_api::Result<()> {
-        let idx: Vec<u64> = chunk_index.iter().map(|&x| x as u64).collect();
-        let family = dtype_family(self.inner.data_type());
-        match family {
-            "i16" | "u16" => {
-                let data_i16: Vec<i16> = data.into_iter().map(|x| x as i16).collect();
-                self.inner.store_chunk(&idx, &data_i16)
-                    .map_err(|e| Error::Other(format!("chunk write error: {}", e)))?;
-            }
-            "i8" | "u8" => {
-                let data_u8: Vec<u8> = data.into_iter().map(|x| x as u8).collect();
-                self.inner.store_chunk(&idx, &data_u8)
-                    .map_err(|e| Error::Other(format!("chunk write error: {}", e)))?;
-            }
-            _ => {
-                self.inner.store_chunk(&idx, &data)
-                    .map_err(|e| Error::Other(format!("chunk write error: {}", e)))?;
-            }
-        }
-        Ok(())
-    }
-
-    fn erase_chunk(&self, chunk_index: Vec<f64>) -> extendr_api::Result<()> {
-        let idx: Vec<u64> = chunk_index.iter().map(|&x| x as u64).collect();
-        self.inner.erase_chunk(&idx)
-            .map_err(|e| Error::Other(format!("erase chunk error: {}", e)))?;
-        Ok(())
     }
 }
 
-// -- private helper for unified read ---------------------------------------
+// -- private helpers for unified read --------------------------------------
+
+fn read_chunk_typed(
+    array: &Array<dyn ReadableStorageTraits>,
+    idx: &[u64],
+    family: &str,
+) -> extendr_api::Result<Robj> {
+    match family {
+        "f64" => {
+            let data: Vec<f64> = array.retrieve_chunk(idx)
+                .map_err(|e| Error::Other(format!("chunk read error: {}", e)))?;
+            Ok(data.into_robj())
+        }
+        "f32" => {
+            let data: Vec<f32> = array.retrieve_chunk(idx)
+                .map_err(|e| Error::Other(format!("chunk read error: {}", e)))?;
+            Ok(data.into_iter().map(|x| x as f64).collect::<Vec<f64>>().into_robj())
+        }
+        "i32" => {
+            let data: Vec<i32> = array.retrieve_chunk(idx)
+                .map_err(|e| Error::Other(format!("chunk read error: {}", e)))?;
+            Ok(data.into_robj())
+        }
+        "u32" => {
+            let data: Vec<u32> = array.retrieve_chunk(idx)
+                .map_err(|e| Error::Other(format!("chunk read error: {}", e)))?;
+            Ok(data.into_iter().map(|x| x as f64).collect::<Vec<f64>>().into_robj())
+        }
+        "i64" | "u64" => {
+            let data: Vec<f64> = array.retrieve_chunk(idx)
+                .map_err(|e| Error::Other(format!("chunk read error: {}", e)))?;
+            Ok(data.into_robj())
+        }
+        "i16" => {
+            let data: Vec<i16> = array.retrieve_chunk(idx)
+                .map_err(|e| Error::Other(format!("chunk read error: {}", e)))?;
+            Ok(data.into_iter().map(|x| x as i32).collect::<Vec<i32>>().into_robj())
+        }
+        "u16" => {
+            let data: Vec<u16> = array.retrieve_chunk(idx)
+                .map_err(|e| Error::Other(format!("chunk read error: {}", e)))?;
+            Ok(data.into_iter().map(|x| x as i32).collect::<Vec<i32>>().into_robj())
+        }
+        "i8" => {
+            let data: Vec<i8> = array.retrieve_chunk(idx)
+                .map_err(|e| Error::Other(format!("chunk read error: {}", e)))?;
+            Ok(data.into_iter().map(|x| x as i32).collect::<Vec<i32>>().into_robj())
+        }
+        "u8" => {
+            let data: Vec<u8> = array.retrieve_chunk(idx)
+                .map_err(|e| Error::Other(format!("chunk read error: {}", e)))?;
+            Ok(data.into_iter().map(|x| x as i32).collect::<Vec<i32>>().into_robj())
+        }
+        _ => unreachable!(),
+    }
+}
 
 impl ZrArray {
     fn retrieve_subset_as_robj(&self, subset: &ArraySubset) -> extendr_api::Result<Robj> {
-        let family = dtype_family(self.inner.data_type());
-        match family {
-            "f64" => {
-                let data: Vec<f64> = self.inner.retrieve_array_subset(subset)
-                    .map_err(|e| Error::Other(format!("read error: {}", e)))?;
-                Ok(data.into_robj())
+        let family = dtype_family(self.inner.data_type())
+            .ok_or_else(|| Error::Other(format!(
+                "unsupported data type: {}", self.inner.data_type()
+            )))?;
+
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| -> extendr_api::Result<Robj> {
+            match family {
+                "f64" => {
+                    let data: Vec<f64> = self.inner.retrieve_array_subset(subset)
+                        .map_err(|e| Error::Other(format!("read error: {}", e)))?;
+                    Ok(data.into_robj())
+                }
+                "f32" => {
+                    let data: Vec<f32> = self.inner.retrieve_array_subset(subset)
+                        .map_err(|e| Error::Other(format!("read error: {}", e)))?;
+                    Ok(data.into_iter().map(|x| x as f64).collect::<Vec<f64>>().into_robj())
+                }
+                "i32" => {
+                    let data: Vec<i32> = self.inner.retrieve_array_subset(subset)
+                        .map_err(|e| Error::Other(format!("read error: {}", e)))?;
+                    Ok(data.into_robj())
+                }
+                "u32" => {
+                    let data: Vec<u32> = self.inner.retrieve_array_subset(subset)
+                        .map_err(|e| Error::Other(format!("read error: {}", e)))?;
+                    Ok(data.into_iter().map(|x| x as f64).collect::<Vec<f64>>().into_robj())
+                }
+                "i64" | "u64" => {
+                    let data: Vec<f64> = self.inner.retrieve_array_subset(subset)
+                        .map_err(|e| Error::Other(format!("read error: {}", e)))?;
+                    Ok(data.into_robj())
+                }
+                "i16" => {
+                    let data: Vec<i16> = self.inner.retrieve_array_subset(subset)
+                        .map_err(|e| Error::Other(format!("read error: {}", e)))?;
+                    Ok(data.into_iter().map(|x| x as i32).collect::<Vec<i32>>().into_robj())
+                }
+                "u16" => {
+                    let data: Vec<u16> = self.inner.retrieve_array_subset(subset)
+                        .map_err(|e| Error::Other(format!("read error: {}", e)))?;
+                    Ok(data.into_iter().map(|x| x as i32).collect::<Vec<i32>>().into_robj())
+                }
+                "i8" => {
+                    let data: Vec<i8> = self.inner.retrieve_array_subset(subset)
+                        .map_err(|e| Error::Other(format!("read error: {}", e)))?;
+                    Ok(data.into_iter().map(|x| x as i32).collect::<Vec<i32>>().into_robj())
+                }
+                "u8" => {
+                    let data: Vec<u8> = self.inner.retrieve_array_subset(subset)
+                        .map_err(|e| Error::Other(format!("read error: {}", e)))?;
+                    Ok(data.into_iter().map(|x| x as i32).collect::<Vec<i32>>().into_robj())
+                }
+                _ => unreachable!(),
             }
-            "f32" => {
-                let data: Vec<f32> = self.inner.retrieve_array_subset(subset)
-                    .map_err(|e| Error::Other(format!("read error: {}", e)))?;
-                let doubles: Vec<f64> = data.into_iter().map(|x| x as f64).collect();
-                Ok(doubles.into_robj())
-            }
-            "i32" | "u32" => {
-                let data: Vec<i32> = self.inner.retrieve_array_subset(subset)
-                    .map_err(|e| Error::Other(format!("read error: {}", e)))?;
-                Ok(data.into_robj())
-            }
-            "i64" | "u64" => {
-                // int64/uint64 → f64 (precision loss for values > 2^53)
-                let data: Vec<f64> = self.inner.retrieve_array_subset(subset)
-                    .map_err(|e| Error::Other(format!("read error: {}", e)))?;
-                Ok(data.into_robj())
-            }
-            "i16" | "u16" => {
-                let data: Vec<i16> = self.inner.retrieve_array_subset(subset)
-                    .map_err(|e| Error::Other(format!("read error: {}", e)))?;
-                let ints: Vec<i32> = data.into_iter().map(|x| x as i32).collect();
-                Ok(ints.into_robj())
-            }
-            "i8" => {
-                let data: Vec<i8> = self.inner.retrieve_array_subset(subset)
-                    .map_err(|e| Error::Other(format!("read error: {}", e)))?;
-                let ints: Vec<i32> = data.into_iter().map(|x| x as i32).collect();
-                Ok(ints.into_robj())
-            }
-            "u8" => {
-                let data: Vec<u8> = self.inner.retrieve_array_subset(subset)
-                    .map_err(|e| Error::Other(format!("read error: {}", e)))?;
-                let ints: Vec<i32> = data.into_iter().map(|x| x as i32).collect();
-                Ok(ints.into_robj())
-            }
-            _ => {
-                let data: Vec<f64> = self.inner.retrieve_array_subset(subset)
-                    .map_err(|e| Error::Other(format!("read error: {}", e)))?;
-                Ok(data.into_robj())
-            }
+        }));
+
+        match result {
+            Ok(r) => r,
+            Err(_) => Err(Error::Other(format!(
+                "zarrs panic reading from '{}'", self.path
+            ))),
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Write — free functions taking &ZrStore + &ZrArray
+//
+// ZrArray holds Array<dyn ReadableStorageTraits> — no store_* methods.
+// We open a fresh Array from store.writable which gives
+// Array<dyn ReadableWritableListableStorageTraits> with write access.
+// ---------------------------------------------------------------------------
+
+/// @export
+#[extendr]
+fn zr_write_subset_inner(
+    store: &ZrStore,
+    arr: &ZrArray,
+    start: Vec<f64>,
+    shape: Vec<f64>,
+    data_f64: Nullable<Vec<f64>>,
+    data_i32: Nullable<Vec<i32>>,
+) -> extendr_api::Result<()> {
+    let ws = store.writable.as_ref()
+        .ok_or_else(|| Error::Other("store is read-only, cannot write".to_string()))?;
+
+    let start_u64: Vec<u64> = start.iter().map(|&x| x as u64).collect();
+    let shape_u64: Vec<u64> = shape.iter().map(|&x| x as u64).collect();
+    let subset = ArraySubset::new_with_start_shape(start_u64, shape_u64)
+        .map_err(|e| Error::Other(format!("invalid subset: {}", e)))?;
+
+    let array = Array::open(ws.clone(), &arr.path)
+        .map_err(|e| Error::Other(format!("cannot open array '{}' for writing: {}", arr.path, e)))?;
+
+    let family = dtype_family(array.data_type())
+        .ok_or_else(|| Error::Other(format!(
+            "unsupported data type for writing: {}", array.data_type()
+        )))?;
+
+    match (data_f64, data_i32) {
+        (NotNull(data), _) => {
+            match family {
+                "f32" => {
+                    let d: Vec<f32> = data.into_iter().map(|x| x as f32).collect();
+                    array.store_array_subset(&subset, &d)
+                        .map_err(|e| Error::Other(format!("write error: {}", e)))?;
+                }
+                "i32" => {
+                    let d: Vec<i32> = data.into_iter().map(|x| x as i32).collect();
+                    array.store_array_subset(&subset, &d)
+                        .map_err(|e| Error::Other(format!("write error: {}", e)))?;
+                }
+                "i16" => {
+                    let d: Vec<i16> = data.into_iter().map(|x| x as i16).collect();
+                    array.store_array_subset(&subset, &d)
+                        .map_err(|e| Error::Other(format!("write error: {}", e)))?;
+                }
+                "i8" => {
+                    let d: Vec<i8> = data.into_iter().map(|x| x as i8).collect();
+                    array.store_array_subset(&subset, &d)
+                        .map_err(|e| Error::Other(format!("write error: {}", e)))?;
+                }
+                "u8" => {
+                    let d: Vec<u8> = data.into_iter().map(|x| x as u8).collect();
+                    array.store_array_subset(&subset, &d)
+                        .map_err(|e| Error::Other(format!("write error: {}", e)))?;
+                }
+                "u16" => {
+                    let d: Vec<u16> = data.into_iter().map(|x| x as u16).collect();
+                    array.store_array_subset(&subset, &d)
+                        .map_err(|e| Error::Other(format!("write error: {}", e)))?;
+                }
+                "u32" => {
+                    let d: Vec<u32> = data.into_iter().map(|x| x as u32).collect();
+                    array.store_array_subset(&subset, &d)
+                        .map_err(|e| Error::Other(format!("write error: {}", e)))?;
+                }
+                "i64" => {
+                    let d: Vec<i64> = data.into_iter().map(|x| x as i64).collect();
+                    array.store_array_subset(&subset, &d)
+                        .map_err(|e| Error::Other(format!("write error: {}", e)))?;
+                }
+                "u64" => {
+                    let d: Vec<u64> = data.into_iter().map(|x| x as u64).collect();
+                    array.store_array_subset(&subset, &d)
+                        .map_err(|e| Error::Other(format!("write error: {}", e)))?;
+                }
+                _ => {
+                    // f64 default
+                    array.store_array_subset(&subset, &data)
+                        .map_err(|e| Error::Other(format!("write error: {}", e)))?;
+                }
+            }
+        }
+        (_, NotNull(data)) => {
+            match family {
+                "i16" | "u16" => {
+                    let d: Vec<i16> = data.into_iter().map(|x| x as i16).collect();
+                    array.store_array_subset(&subset, &d)
+                        .map_err(|e| Error::Other(format!("write error: {}", e)))?;
+                }
+                "i8" => {
+                    let d: Vec<i8> = data.into_iter().map(|x| x as i8).collect();
+                    array.store_array_subset(&subset, &d)
+                        .map_err(|e| Error::Other(format!("write error: {}", e)))?;
+                }
+                "u8" => {
+                    let d: Vec<u8> = data.into_iter().map(|x| x as u8).collect();
+                    array.store_array_subset(&subset, &d)
+                        .map_err(|e| Error::Other(format!("write error: {}", e)))?;
+                }
+                _ => {
+                    array.store_array_subset(&subset, &data)
+                        .map_err(|e| Error::Other(format!("write error: {}", e)))?;
+                }
+            }
+        }
+        _ => {
+            return Err(Error::Other("zr_write: no data provided".to_string()));
+        }
+    }
+    Ok(())
+}
+
+/// @export
+#[extendr]
+fn zr_write_chunk_inner(
+    store: &ZrStore,
+    arr: &ZrArray,
+    chunk_index: Vec<f64>,
+    data_f64: Nullable<Vec<f64>>,
+    data_i32: Nullable<Vec<i32>>,
+) -> extendr_api::Result<()> {
+    let ws = store.writable.as_ref()
+        .ok_or_else(|| Error::Other("store is read-only, cannot write chunk".to_string()))?;
+
+    let idx: Vec<u64> = chunk_index.iter().map(|&x| x as u64).collect();
+
+    let array = Array::open(ws.clone(), &arr.path)
+        .map_err(|e| Error::Other(format!("cannot open array '{}' for writing: {}", arr.path, e)))?;
+
+    let family = dtype_family(array.data_type())
+        .ok_or_else(|| Error::Other(format!(
+            "unsupported data type for writing: {}", array.data_type()
+        )))?;
+
+    match (data_f64, data_i32) {
+        (NotNull(data), _) => {
+            match family {
+                "f32" => {
+                    let d: Vec<f32> = data.into_iter().map(|x| x as f32).collect();
+                    array.store_chunk(&idx, &d)
+                        .map_err(|e| Error::Other(format!("chunk write error: {}", e)))?;
+                }
+                _ => {
+                    array.store_chunk(&idx, &data)
+                        .map_err(|e| Error::Other(format!("chunk write error: {}", e)))?;
+                }
+            }
+        }
+        (_, NotNull(data)) => {
+            match family {
+                "i16" | "u16" => {
+                    let d: Vec<i16> = data.into_iter().map(|x| x as i16).collect();
+                    array.store_chunk(&idx, &d)
+                        .map_err(|e| Error::Other(format!("chunk write error: {}", e)))?;
+                }
+                "i8" => {
+                    let d: Vec<i8> = data.into_iter().map(|x| x as i8).collect();
+                    array.store_chunk(&idx, &d)
+                        .map_err(|e| Error::Other(format!("chunk write error: {}", e)))?;
+                }
+                "u8" => {
+                    let d: Vec<u8> = data.into_iter().map(|x| x as u8).collect();
+                    array.store_chunk(&idx, &d)
+                        .map_err(|e| Error::Other(format!("chunk write error: {}", e)))?;
+                }
+                _ => {
+                    array.store_chunk(&idx, &data)
+                        .map_err(|e| Error::Other(format!("chunk write error: {}", e)))?;
+                }
+            }
+        }
+        _ => {
+            return Err(Error::Other("zr_write_chunk: no data provided".to_string()));
+        }
+    }
+    Ok(())
+}
+
+/// @export
+#[extendr]
+fn zr_erase_chunk_inner(
+    store: &ZrStore,
+    arr: &ZrArray,
+    chunk_index: Vec<f64>,
+) -> extendr_api::Result<()> {
+    let ws = store.writable.as_ref()
+        .ok_or_else(|| Error::Other("store is read-only, cannot erase chunk".to_string()))?;
+
+    let idx: Vec<u64> = chunk_index.iter().map(|&x| x as u64).collect();
+
+    let array = Array::open(ws.clone(), &arr.path)
+        .map_err(|e| Error::Other(format!("cannot open array '{}' for erase: {}", arr.path, e)))?;
+
+    array.erase_chunk(&idx)
+        .map_err(|e| Error::Other(format!("erase chunk error: {}", e)))?;
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -526,7 +706,6 @@ fn zr_create_array_inner(
         .map_err(|e| Error::Other(format!("cannot create array '{}': {}", path, e)))?;
     array.store_metadata()
         .map_err(|e| Error::Other(format!("cannot store array metadata: {}", e)))?;
-    // Re-open with readable storage so the type matches ZrArray.inner
     let array = Array::open(store.readable.clone(), path)
         .map_err(|e| Error::Other(format!("cannot reopen array '{}': {}", path, e)))?;
 
@@ -546,7 +725,7 @@ fn zr_nodes_inner(store: &ZrStore, path: &str) -> List {
     let ws = match store.writable.as_ref() {
         Some(s) => s,
         None => {
-            throw_r_error("store does not support listing (HTTP stores are read-only, use zr_array() directly)");
+            throw_r_error("store does not support listing (remote stores cannot list, use zr_array() directly)");
         }
     };
 
@@ -597,7 +776,6 @@ fn zr_nodes_inner(store: &ZrStore, path: &str) -> List {
 /// @export
 #[extendr]
 fn zr_zarrs_version() -> String {
-    // zarrs version is reported via the zarrs crate metadata at compile time
     format!("zr {}", env!("CARGO_PKG_VERSION"))
 }
 
@@ -611,6 +789,9 @@ extendr_module! {
     impl ZrGroup;
     impl ZrArray;
     fn zr_create_array_inner;
+    fn zr_write_subset_inner;
+    fn zr_write_chunk_inner;
+    fn zr_erase_chunk_inner;
     fn zr_nodes_inner;
     fn zr_zarrs_version;
 }

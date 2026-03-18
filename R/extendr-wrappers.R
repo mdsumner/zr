@@ -14,6 +14,15 @@ NULL
 zr_create_array_inner <- function(store, path, shape, chunks, dtype, fill_value, dimension_names, attributes_json) .Call(wrap__zr_create_array_inner, store, path, shape, chunks, dtype, fill_value, dimension_names, attributes_json)
 
 #' @export
+zr_write_subset_inner <- function(store, arr, start, shape, data_f64, data_i32) .Call(wrap__zr_write_subset_inner, store, arr, start, shape, data_f64, data_i32)
+
+#' @export
+zr_write_chunk_inner <- function(store, arr, chunk_index, data_f64, data_i32) .Call(wrap__zr_write_chunk_inner, store, arr, chunk_index, data_f64, data_i32)
+
+#' @export
+zr_erase_chunk_inner <- function(store, arr, chunk_index) .Call(wrap__zr_erase_chunk_inner, store, arr, chunk_index)
+
+#' @export
 zr_nodes_inner <- function(store, path) .Call(wrap__zr_nodes_inner, store, path)
 
 #' @export
@@ -30,6 +39,8 @@ ZrStore$new_s3 <- function(url) .Call(wrap__ZrStore__new_s3, url)
 ZrStore$path <- function() .Call(wrap__ZrStore__path, self)
 
 ZrStore$is_writable <- function() .Call(wrap__ZrStore__is_writable, self)
+
+ZrStore$is_listable <- function() .Call(wrap__ZrStore__is_listable, self)
 
 #' @export
 `$.ZrStore` <- function (self, name) { func <- ZrStore[[name]]; environment(func) <- environment(); func }
@@ -80,16 +91,6 @@ ZrArray$read_subset_robj <- function(start, shape) .Call(wrap__ZrArray__read_sub
 ZrArray$read_all_robj <- function() .Call(wrap__ZrArray__read_all_robj, self)
 
 ZrArray$read_chunk_robj <- function(chunk_index) .Call(wrap__ZrArray__read_chunk_robj, self, chunk_index)
-
-ZrArray$write_subset_f64 <- function(start, shape, data) .Call(wrap__ZrArray__write_subset_f64, self, start, shape, data)
-
-ZrArray$write_subset_i32 <- function(start, shape, data) .Call(wrap__ZrArray__write_subset_i32, self, start, shape, data)
-
-ZrArray$write_chunk_f64 <- function(chunk_index, data) .Call(wrap__ZrArray__write_chunk_f64, self, chunk_index, data)
-
-ZrArray$write_chunk_i32 <- function(chunk_index, data) .Call(wrap__ZrArray__write_chunk_i32, self, chunk_index, data)
-
-ZrArray$erase_chunk <- function(chunk_index) .Call(wrap__ZrArray__erase_chunk, self, chunk_index)
 
 #' @export
 `$.ZrArray` <- function (self, name) { func <- ZrArray[[name]]; environment(func) <- environment(); func }

@@ -4,9 +4,11 @@
 \alias{zr_write}
 \title{Write data to an array subset}
 \usage{
-zr_write(arr, data, offset, count)
+zr_write(store, arr, data, offset, count)
 }
 \arguments{
+\item{store}{A ZrStore (must be writable — filesystem only).}
+
 \item{arr}{A ZrArray.}
 
 \item{data}{Numeric or integer vector.}
@@ -16,6 +18,9 @@ zr_write(arr, data, offset, count)
 \item{count}{Numeric vector of counts per dimension.}
 }
 \description{
+Writes to local filesystem stores only. Remote stores are read-only.
+}
+\details{
 Data should be in C-contiguous (row-major) order. For a matrix created
 with \code{byrow = TRUE} (as returned by \code{\link[=zr_read]{zr_read()}}), flatten with
 \code{as.vector(t(m))} before writing.

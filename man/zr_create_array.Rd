@@ -16,7 +16,7 @@ zr_create_array(
 )
 }
 \arguments{
-\item{store}{A ZrStore.}
+\item{store}{A ZrStore (must be writable — filesystem only).}
 
 \item{path}{Character, array path within the store.}
 
@@ -37,5 +37,5 @@ zr_create_array(
 A ZrArray object (external pointer).
 }
 \description{
-Create a new Zarr array
+Creates on local filesystem stores only. Remote stores are read-only.
 }

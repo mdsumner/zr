@@ -1,7 +1,10 @@
 #' @export
 format.ZrStore <- function(x, ...) {
-  rw <- if (x$is_writable()) "rw" else "ro"
-  paste0("<ZrStore> [", rw, "] ", x$path())
+  flags <- if (x$is_writable()) "rw" else "ro"
+  if (x$is_listable() && !x$is_writable()) {
+    flags <- paste0(flags, ",list")
+  }
+  paste0("<ZrStore> [", flags, "] ", x$path())
 }
 
 #' @export

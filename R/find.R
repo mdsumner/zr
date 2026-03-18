@@ -17,7 +17,8 @@ zr_find_stores <- function(path) {
 
   if (length(marker_files) == 0L) return(character(0))
 
-  rel <- sub(paste0("^", gsub("([.+*?^${}()|\\[\\]])", "\\\\\\1", path), "/?"), "", marker_files)
+  ## Strip the root path to get relative paths
+  rel <- substring(marker_files, nchar(path) + 2L)
 
   store_roots <- vapply(rel, function(r) {
     parts <- strsplit(r, "/", fixed = TRUE)[[1]]

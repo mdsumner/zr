@@ -9,8 +9,10 @@ zr_store <- function(path) {
 
 #' Open a remote Zarr store over HTTP
 #'
-#' Opens a read-only zarr store served over HTTP/HTTPS using the
-#' object_store crate.
+#' Opens a read-only zarr store served over HTTP/HTTPS using simple GET
+#' requests. Works with any HTTP server — no WebDAV needed. Listing
+#' ([zr_nodes()]) is not supported; use [zr_array()] directly with
+#' known array paths.
 #'
 #' @param url Character, base URL of the zarr hierarchy (e.g.
 #'   `"https://example.com/path/to/store.zarr"`).
@@ -22,9 +24,11 @@ zr_http_store <- function(url) {
 
 #' Open a remote Zarr store on S3
 #'
-#' Opens a read-only zarr store from an S3 bucket. Credentials are
-#' read from the environment (AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY,
-#' AWS_DEFAULT_REGION, etc.).
+#' Opens a read-only zarr store from an S3-compatible bucket. Credentials
+#' are read from the environment (`AWS_ACCESS_KEY_ID`,
+#' `AWS_SECRET_ACCESS_KEY`, `AWS_DEFAULT_REGION`, etc.). For anonymous
+#' access to public buckets, set `AWS_ACCESS_KEY_ID=""` and
+#' `AWS_SECRET_ACCESS_KEY=""`.
 #'
 #' @param url Character, S3 URL (e.g. `"s3://bucket/path/to/store.zarr"`).
 #' @return A ZrStore object (external pointer, read-only).
@@ -35,7 +39,8 @@ zr_s3_store <- function(url) {
 
 #' Open an existing Zarr array
 #'
-#' @param store A ZrStore (from [zr_store()]).
+#' @param store A ZrStore (from [zr_store()], [zr_http_store()], or
+#'   [zr_s3_store()]).
 #' @param path Character, path within the store (e.g. `"/temperature"`).
 #' @return A ZrArray object (external pointer).
 #' @export
@@ -55,7 +60,7 @@ zr_group <- function(store, path = "/") {
 
 #' Create a Zarr group and store its metadata
 #'
-#' @param store A ZrStore.
+#' @param store A ZrStore (must be writable — filesystem only).
 #' @param path Character, group path within the store.
 #' @return A ZrGroup object (external pointer), invisibly.
 #' @export
@@ -185,54 +190,67 @@ zr_read_chunk <- function(arr, chunk_index) {
 }
 
 # ---------------------------------------------------------------------------
-# Write
+# Write (filesystem stores only)
 # ---------------------------------------------------------------------------
 
 #' Write data to an array subset
+#'
+#' Writes to local filesystem stores only. Remote stores are read-only.
 #'
 #' Data should be in C-contiguous (row-major) order. For a matrix created
 #' with `byrow = TRUE` (as returned by [zr_read()]), flatten with
 #' `as.vector(t(m))` before writing.
 #'
+#' @param store A ZrStore (must be writable — filesystem only).
 #' @param arr A ZrArray.
 #' @param data Numeric or integer vector.
 #' @param offset Numeric vector of 0-based start indices.
 #' @param count Numeric vector of counts per dimension.
 #' @export
-zr_write <- function(arr, data, offset, count) {
+zr_write <- function(store, arr, data, offset, count) {
   offset <- as.numeric(offset)
   count <- as.numeric(count)
   if (is.integer(data)) {
-    arr$write_subset_i32(offset, count, data)
+    zr_write_subset_inner(store, arr, offset, count,
+                          data_f64 = NULL, data_i32 = data)
   } else {
-    arr$write_subset_f64(offset, count, as.double(data))
+    zr_write_subset_inner(store, arr, offset, count,
+                          data_f64 = as.double(data), data_i32 = NULL)
   }
   invisible(NULL)
 }
 
 #' Write data to a chunk
 #'
+#' Writes to local filesystem stores only. Remote stores are read-only.
+#'
+#' @param store A ZrStore (must be writable — filesystem only).
 #' @param arr A ZrArray.
 #' @param data Numeric or integer vector.
 #' @param chunk_index Numeric vector of chunk indices (0-based).
 #' @export
-zr_write_chunk <- function(arr, data, chunk_index) {
+zr_write_chunk <- function(store, arr, data, chunk_index) {
   chunk_index <- as.numeric(chunk_index)
   if (is.integer(data)) {
-    arr$write_chunk_i32(chunk_index, data)
+    zr_write_chunk_inner(store, arr, chunk_index,
+                         data_f64 = NULL, data_i32 = data)
   } else {
-    arr$write_chunk_f64(chunk_index, as.double(data))
+    zr_write_chunk_inner(store, arr, chunk_index,
+                         data_f64 = as.double(data), data_i32 = NULL)
   }
   invisible(NULL)
 }
 
 #' Erase a chunk
 #'
+#' Erases on local filesystem stores only. Remote stores are read-only.
+#'
+#' @param store A ZrStore (must be writable — filesystem only).
 #' @param arr A ZrArray.
 #' @param chunk_index Numeric vector of chunk indices (0-based).
 #' @export
-zr_erase_chunk <- function(arr, chunk_index) {
-  arr$erase_chunk(as.numeric(chunk_index))
+zr_erase_chunk <- function(store, arr, chunk_index) {
+  zr_erase_chunk_inner(store, arr, as.numeric(chunk_index))
   invisible(NULL)
 }
 
@@ -242,7 +260,9 @@ zr_erase_chunk <- function(arr, chunk_index) {
 
 #' Create a new Zarr array
 #'
-#' @param store A ZrStore.
+#' Creates on local filesystem stores only. Remote stores are read-only.
+#'
+#' @param store A ZrStore (must be writable — filesystem only).
 #' @param path Character, array path within the store.
 #' @param shape Numeric vector of dimension sizes.
 #' @param chunks Numeric vector of chunk sizes.
@@ -269,6 +289,9 @@ zr_create_array <- function(store, path, shape, chunks, dtype,
 # ---------------------------------------------------------------------------
 
 #' List nodes in a Zarr store
+#'
+#' Lists child nodes (arrays and groups) under a path. Requires a
+#' listable store (filesystem). HTTP stores do not support listing.
 #'
 #' @param store A ZrStore.
 #' @param path Character, root path to list from.

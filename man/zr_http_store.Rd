@@ -14,6 +14,8 @@ zr_http_store(url)
 A ZrStore object (external pointer, read-only).
 }
 \description{
-Opens a read-only zarr store served over HTTP/HTTPS using the
-object_store crate.
+Opens a read-only zarr store served over HTTP/HTTPS using simple GET
+requests. Works with any HTTP server — no WebDAV needed. Listing
+(\code{\link[=zr_nodes]{zr_nodes()}}) is not supported; use \code{\link[=zr_array]{zr_array()}} directly with
+known array paths.
 }

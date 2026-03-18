@@ -15,5 +15,6 @@ zr_nodes(store, path = "/")
 A data.frame with columns \code{path} and \code{node_type}.
 }
 \description{
-List nodes in a Zarr store
+Lists child nodes (arrays and groups) under a path. Requires a
+listable store (filesystem). HTTP stores do not support listing.
 }
