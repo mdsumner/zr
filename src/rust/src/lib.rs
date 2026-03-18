@@ -8,16 +8,42 @@ use zarrs::filesystem::FilesystemStore;
 use zarrs::group::{Group, GroupBuilder};
 use zarrs::storage::{
     ReadableWritableListableStorage, ReadableWritableListableStorageTraits,
+    ReadableStorageTraits, ReadableListableStorageTraits,
 };
+use zarrs::storage::storage_adapter::async_to_sync::{
+    AsyncToSyncStorageAdapter, AsyncToSyncBlockOn,
+};
+use zarrs_object_store::AsyncObjectStore;
 
 // ---------------------------------------------------------------------------
-// Store
+// Tokio runtime
+// ---------------------------------------------------------------------------
+
+struct TokioBlockOn(tokio::runtime::Runtime);
+
+impl AsyncToSyncBlockOn for TokioBlockOn {
+    fn block_on<F: core::future::Future>(&self, future: F) -> F::Output {
+        self.0.block_on(future)
+    }
+}
+
+fn get_tokio_runtime() -> extendr_api::Result<tokio::runtime::Runtime> {
+    tokio::runtime::Runtime::new()
+        .map_err(|e| Error::Other(format!("cannot create tokio runtime: {}", e)))
+}
+
+// ---------------------------------------------------------------------------
+// Store — uses ReadableWritableListableStorage for filesystem,
+//         which is also readable+listable for read-only operations.
+//         Remote stores get wrapped async→sync into this same type
+//         where possible, or we use a read-only variant.
 // ---------------------------------------------------------------------------
 
 #[extendr]
 struct ZrStore {
     inner: ReadableWritableListableStorage,
     path: String,
+    writable: bool,
 }
 
 impl std::fmt::Debug for ZrStore {
@@ -28,16 +54,61 @@ impl std::fmt::Debug for ZrStore {
 
 #[extendr]
 impl ZrStore {
+    /// Open a local filesystem store (read-write)
     fn new(path: &str) -> extendr_api::Result<Self> {
         let store_path: PathBuf = path.into();
         let store: ReadableWritableListableStorage =
             Arc::new(FilesystemStore::new(&store_path)
                 .map_err(|e| Error::Other(format!("cannot open store '{}': {}", path, e)))?);
-        Ok(Self { inner: store, path: path.to_string() })
+        Ok(Self { inner: store, path: path.to_string(), writable: true })
+    }
+
+    /// Open a remote HTTP store via object_store (read-only)
+    fn new_http(url: &str) -> extendr_api::Result<Self> {
+        let runtime = get_tokio_runtime()?;
+
+        let client_options = object_store::ClientOptions::new()
+            .with_allow_http(true);
+
+        let os = object_store::http::HttpBuilder::new()
+            .with_url(url)
+            .with_client_options(client_options)
+            .build()
+            .map_err(|e| Error::Other(format!("cannot create HTTP store '{}': {}", url, e)))?;
+
+        let async_store = Arc::new(AsyncObjectStore::new(Arc::new(os)));
+        let block_on = TokioBlockOn(runtime);
+        let sync_store: ReadableWritableListableStorage = Arc::new(
+            AsyncToSyncStorageAdapter::new(async_store, block_on)
+        );
+
+        Ok(Self { inner: sync_store, path: url.to_string(), writable: false })
+    }
+
+    /// Open an S3 store via object_store (read-only, uses env credentials)
+    fn new_s3(url: &str) -> extendr_api::Result<Self> {
+        let runtime = get_tokio_runtime()?;
+
+        let os = object_store::aws::AmazonS3Builder::from_env()
+            .with_url(url)
+            .build()
+            .map_err(|e| Error::Other(format!("cannot create S3 store '{}': {}", url, e)))?;
+
+        let async_store = Arc::new(AsyncObjectStore::new(Arc::new(os)));
+        let block_on = TokioBlockOn(runtime);
+        let sync_store: ReadableWritableListableStorage = Arc::new(
+            AsyncToSyncStorageAdapter::new(async_store, block_on)
+        );
+
+        Ok(Self { inner: sync_store, path: url.to_string(), writable: false })
     }
 
     fn path(&self) -> &str {
         &self.path
+    }
+
+    fn is_writable(&self) -> bool {
+        self.writable
     }
 }
 
@@ -456,28 +527,21 @@ fn zr_create_array_inner(
 
 /// @export
 #[extendr]
-fn zr_nodes_inner(store: &ZrStore, path: &str) -> extendr_api::Result<List> {
+fn zr_nodes_inner(store: &ZrStore, path: &str) -> List {
     use zarrs::node::Node;
     use zarrs::node::NodeMetadata;
 
-    // zarrs may panic on malformed stores (V2 edge cases, bare arrays, etc.)
-    // catch_unwind converts panics into errors so R doesn't crash
     let node_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         Node::open(&store.inner, path)
     }));
 
     let node = match node_result {
         Ok(Ok(n)) => n,
-        Ok(Err(e)) => return Err(Error::Other(format!("cannot open node '{}': {}", path, e))),
-        Err(panic) => {
-            let msg = if let Some(s) = panic.downcast_ref::<&str>() {
-                s.to_string()
-            } else if let Some(s) = panic.downcast_ref::<String>() {
-                s.clone()
-            } else {
-                "unknown panic".to_string()
-            };
-            return Err(Error::Other(format!("zarrs panic opening '{}': {}", path, msg)));
+        Ok(Err(e)) => {
+            throw_r_error(format!("cannot open node '{}': {}", path, e));
+        }
+        Err(_) => {
+            throw_r_error(format!("zarrs internal error opening '{}'", path));
         }
     };
 
@@ -487,15 +551,8 @@ fn zr_nodes_inner(store: &ZrStore, path: &str) -> extendr_api::Result<List> {
 
     let children = match children_result {
         Ok(c) => c,
-        Err(panic) => {
-            let msg = if let Some(s) = panic.downcast_ref::<&str>() {
-                s.to_string()
-            } else if let Some(s) = panic.downcast_ref::<String>() {
-                s.clone()
-            } else {
-                "unknown panic".to_string()
-            };
-            return Err(Error::Other(format!("zarrs panic listing children of '{}': {}", path, msg)));
+        Err(_) => {
+            throw_r_error(format!("zarrs internal error listing children of '{}'", path));
         }
     };
 
@@ -511,7 +568,7 @@ fn zr_nodes_inner(store: &ZrStore, path: &str) -> extendr_api::Result<List> {
         types.push(ntype.to_string());
     }
 
-    Ok(list!(path = paths, node_type = types))
+    list!(path = paths, node_type = types)
 }
 
 // ---------------------------------------------------------------------------

@@ -7,6 +7,32 @@ zr_store <- function(path) {
   ZrStore$new(normalizePath(path.expand(path), mustWork = FALSE))
 }
 
+#' Open a remote Zarr store over HTTP
+#'
+#' Opens a read-only zarr store served over HTTP/HTTPS using the
+#' object_store crate.
+#'
+#' @param url Character, base URL of the zarr hierarchy (e.g.
+#'   `"https://example.com/path/to/store.zarr"`).
+#' @return A ZrStore object (external pointer, read-only).
+#' @export
+zr_http_store <- function(url) {
+  ZrStore$new_http(url)
+}
+
+#' Open a remote Zarr store on S3
+#'
+#' Opens a read-only zarr store from an S3 bucket. Credentials are
+#' read from the environment (AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY,
+#' AWS_DEFAULT_REGION, etc.).
+#'
+#' @param url Character, S3 URL (e.g. `"s3://bucket/path/to/store.zarr"`).
+#' @return A ZrStore object (external pointer, read-only).
+#' @export
+zr_s3_store <- function(url) {
+  ZrStore$new_s3(url)
+}
+
 #' Open an existing Zarr array
 #'
 #' @param store A ZrStore (from [zr_store()]).

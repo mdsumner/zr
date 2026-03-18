@@ -1,6 +1,7 @@
 #' @export
 format.ZrStore <- function(x, ...) {
-  paste0("<ZrStore> ", x$path())
+  rw <- if (x$is_writable()) "rw" else "ro"
+  paste0("<ZrStore> [", rw, "] ", x$path())
 }
 
 #' @export

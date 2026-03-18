@@ -23,7 +23,13 @@ ZrStore <- new.env(parent = emptyenv())
 
 ZrStore$new <- function(path) .Call(wrap__ZrStore__new, path)
 
+ZrStore$new_http <- function(url) .Call(wrap__ZrStore__new_http, url)
+
+ZrStore$new_s3 <- function(url) .Call(wrap__ZrStore__new_s3, url)
+
 ZrStore$path <- function() .Call(wrap__ZrStore__path, self)
+
+ZrStore$is_writable <- function() .Call(wrap__ZrStore__is_writable, self)
 
 #' @export
 `$.ZrStore` <- function (self, name) { func <- ZrStore[[name]]; environment(func) <- environment(); func }
