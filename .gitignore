@@ -8,7 +8,3 @@ src/.cargo/
 *.so
 *.dll
 *.dylib
-.Rdata
-.httr-oauth
-.DS_Store
-.quarto

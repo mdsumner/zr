@@ -131,13 +131,14 @@ impl ZrArray {
         self.inner.shape().iter().map(|&x| x as f64).collect()
     }
 
-    /// Chunk shape as f64 vector
-    fn chunk_shape(&self) -> Vec<f64> {
-        self.inner
-            .chunk_grid_shape()
-            .iter()
-            .map(|&x| x as f64)
-            .collect()
+    /// Chunk shape as f64 vector (element dimensions of a chunk, not the grid shape).
+    /// Returns the shape of the origin chunk, which is the regular chunk size.
+    fn chunk_shape(&self) -> extendr_api::Result<Vec<f64>> {
+        let ndim = self.inner.dimensionality();
+        let origin: Vec<u64> = vec![0; ndim];
+        let cs = self.inner.chunk_shape(&origin)
+            .map_err(|e| Error::Other(format!("cannot get chunk shape: {}", e)))?;
+        Ok(cs.iter().map(|&x| x.get() as f64).collect())
     }
 
     fn dtype(&self) -> String {

@@ -16,7 +16,7 @@ Requires Rust toolchain (rustc >= 1.82.0, cargo):
 
 ```r
 # install.packages("pak")
-pak::pak("mdsumner/zr")
+pak::pak("hypertidy/zr")
 ```
 
 ## Quick start
@@ -34,7 +34,7 @@ arr <- zr_create_array(s, "/data",
   dtype = "float64", fill_value = NaN,
   dimension_names = c("y", "x"))
 
-zr_write(arr, mm <- rnorm(100 * 200), offset = c(0, 0), count = c(100, 200))
+zr_write(arr, rnorm(100 * 200), offset = c(0, 0), count = c(100, 200))
 
 m <- zr_read(arr)
 # m is a 100x200 matrix, oriented for ximage()/rasterImage()
