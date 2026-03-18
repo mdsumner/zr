@@ -8,7 +8,7 @@ use zarrs::filesystem::FilesystemStore;
 use zarrs::group::{Group, GroupBuilder};
 use zarrs::storage::{
     ReadableWritableListableStorage, ReadableWritableListableStorageTraits,
-    ReadableStorageTraits, ReadableListableStorageTraits,
+    ReadableStorage, ReadableStorageTraits,
 };
 use zarrs::storage::storage_adapter::async_to_sync::{
     AsyncToSyncStorageAdapter, AsyncToSyncBlockOn,
@@ -41,9 +41,11 @@ fn get_tokio_runtime() -> extendr_api::Result<tokio::runtime::Runtime> {
 
 #[extendr]
 struct ZrStore {
-    inner: ReadableWritableListableStorage,
+    /// Read-only handle — works for all store types
+    readable: ReadableStorage,
+    /// Read-write-listable handle — only for filesystem stores
+    writable: Option<ReadableWritableListableStorage>,
     path: String,
-    writable: bool,
 }
 
 impl std::fmt::Debug for ZrStore {
@@ -60,17 +62,25 @@ impl ZrStore {
         let store: ReadableWritableListableStorage =
             Arc::new(FilesystemStore::new(&store_path)
                 .map_err(|e| Error::Other(format!("cannot open store '{}': {}", path, e)))?);
-        Ok(Self { inner: store, path: path.to_string(), writable: true })
+        Ok(Self {
+            readable: store.clone() as ReadableStorage,
+            writable: Some(store),
+            path: path.to_string(),
+        })
     }
 
     /// Open a remote HTTP store for reading zarr via simple GET requests.
-    /// This works with any HTTP server — no WebDAV/PROPFIND needed.
-    /// Note: listing (zr_nodes) is not supported; use zr_array() directly.
+    /// Works with any HTTP server — no WebDAV/PROPFIND needed.
+    /// Listing (zr_nodes) is not supported; use zr_array() directly.
     fn new_http(url: &str) -> extendr_api::Result<Self> {
         let http_store = zarrs_http::HTTPStore::new(url)
             .map_err(|e| Error::Other(format!("cannot create HTTP store '{}': {}", url, e)))?;
-        let store: ReadableWritableListableStorage = Arc::new(http_store);
-        Ok(Self { inner: store, path: url.to_string(), writable: false })
+        let store: ReadableStorage = Arc::new(http_store);
+        Ok(Self {
+            readable: store,
+            writable: None,
+            path: url.to_string(),
+        })
     }
 
     /// Open an S3 store via object_store (read-only, uses env credentials)
@@ -84,11 +94,15 @@ impl ZrStore {
 
         let async_store = Arc::new(AsyncObjectStore::new(os));
         let block_on = TokioBlockOn(runtime);
-        let sync_store: ReadableWritableListableStorage = Arc::new(
+        let sync_store = Arc::new(
             AsyncToSyncStorageAdapter::new(async_store, block_on)
         );
 
-        Ok(Self { inner: sync_store, path: url.to_string(), writable: false })
+        Ok(Self {
+            readable: sync_store.clone() as ReadableStorage,
+            writable: None,
+            path: url.to_string(),
+        })
     }
 
     fn path(&self) -> &str {
@@ -96,7 +110,7 @@ impl ZrStore {
     }
 
     fn is_writable(&self) -> bool {
-        self.writable
+        self.writable.is_some()
     }
 }
 
@@ -106,7 +120,7 @@ impl ZrStore {
 
 #[extendr]
 struct ZrGroup {
-    inner: Group<dyn ReadableWritableListableStorageTraits>,
+    inner: Group<dyn ReadableStorageTraits>,
     path: String,
 }
 
@@ -119,17 +133,22 @@ impl std::fmt::Debug for ZrGroup {
 #[extendr]
 impl ZrGroup {
     fn open(store: &ZrStore, path: &str) -> extendr_api::Result<Self> {
-        let group = Group::open(store.inner.clone(), path)
+        let group = Group::open(store.readable.clone(), path)
             .map_err(|e| Error::Other(format!("cannot open group '{}': {}", path, e)))?;
         Ok(Self { inner: group, path: path.to_string() })
     }
 
     fn create(store: &ZrStore, path: &str) -> extendr_api::Result<Self> {
+        let ws = store.writable.as_ref()
+            .ok_or_else(|| Error::Other("store is read-only, cannot create group".to_string()))?;
         let group = GroupBuilder::new()
-            .build(store.inner.clone(), path)
+            .build(ws.clone(), path)
             .map_err(|e| Error::Other(format!("cannot create group '{}': {}", path, e)))?;
         group.store_metadata()
             .map_err(|e| Error::Other(format!("cannot store group metadata: {}", e)))?;
+        // Re-open with readable storage so the type matches ZrGroup.inner
+        let group = Group::open(store.readable.clone(), path)
+            .map_err(|e| Error::Other(format!("cannot reopen group '{}': {}", path, e)))?;
         Ok(Self { inner: group, path: path.to_string() })
     }
 
@@ -148,7 +167,7 @@ impl ZrGroup {
 
 #[extendr]
 struct ZrArray {
-    inner: Array<dyn ReadableWritableListableStorageTraits>,
+    inner: Array<dyn ReadableStorageTraits>,
     path: String,
 }
 
@@ -179,7 +198,7 @@ fn dtype_family(dt: &zarrs::array::DataType) -> &'static str {
 impl ZrArray {
     fn open(store: &ZrStore, path: &str) -> extendr_api::Result<Self> {
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            Array::open(store.inner.clone(), path)
+            Array::open(store.readable.clone(), path)
         }));
         let array = match result {
             Ok(Ok(a)) => a,
@@ -501,10 +520,15 @@ fn zr_create_array_inner(
         }
     }
 
-    let array = builder.build(store.inner.clone(), path)
+    let ws = store.writable.as_ref()
+        .ok_or_else(|| Error::Other("store is read-only, cannot create array".to_string()))?;
+    let array = builder.build(ws.clone(), path)
         .map_err(|e| Error::Other(format!("cannot create array '{}': {}", path, e)))?;
     array.store_metadata()
         .map_err(|e| Error::Other(format!("cannot store array metadata: {}", e)))?;
+    // Re-open with readable storage so the type matches ZrArray.inner
+    let array = Array::open(store.readable.clone(), path)
+        .map_err(|e| Error::Other(format!("cannot reopen array '{}': {}", path, e)))?;
 
     Ok(ZrArray { inner: array, path: path.to_string() })
 }
@@ -519,8 +543,15 @@ fn zr_nodes_inner(store: &ZrStore, path: &str) -> List {
     use zarrs::node::Node;
     use zarrs::node::NodeMetadata;
 
+    let ws = match store.writable.as_ref() {
+        Some(s) => s,
+        None => {
+            throw_r_error("store does not support listing (HTTP stores are read-only, use zr_array() directly)");
+        }
+    };
+
     let node_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        Node::open(&store.inner, path)
+        Node::open(ws, path)
     }));
 
     let node = match node_result {
