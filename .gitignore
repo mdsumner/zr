@@ -1,0 +1,14 @@
+.Rproj.user
+.Rhistory
+.RData
+.Ruserdata
+src/rust/target/
+src/.cargo/
+*.o
+*.so
+*.dll
+*.dylib
+.Rdata
+.httr-oauth
+.DS_Store
+.quarto

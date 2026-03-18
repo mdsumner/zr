@@ -1,0 +1,22 @@
+Package: zr
+Title: Zarr V2/V3 Arrays via the 'zarrs' Rust Crate
+Version: 0.0.1
+Authors@R: person("Michael D.", "Sumner", email = "mdsumner@gmail.com",
+                  role = c("aut", "cre"))
+Description: Read and write Zarr V2 and V3 multidimensional arrays using the
+    'zarrs' Rust library. Provides low-level access to stores, groups, arrays,
+    chunks, and metadata with minimal overhead. Designed as a composable
+    building block for higher-level array packages.
+License: Apache License (>= 2)
+URL: https://github.com/hypertidy/zr
+BugReports: https://github.com/hypertidy/zr/issues
+Encoding: UTF-8
+Roxygen: list(markdown = TRUE)
+RoxygenNote: 7.3.3
+SystemRequirements: Cargo (Rust's package manager), rustc >= 1.82.0
+Imports:
+    jsonlite
+Suggests:
+    testthat (>= 3.0.0)
+Config/testthat/edition: 3
+Config/rextendr/version: 0.4.2
