@@ -10,7 +10,7 @@ name = "zr"
 [features]
 default = ["local"]
 local = []
-remote = ["dep:zarrs_object_store", "dep:zarrs_http", "dep:object_store", "dep:tokio"]
+remote = ["dep:zarrs_object_store", "dep:object_store", "dep:tokio"]
 
 [dependencies]
 extendr-api = "0.8"
@@ -18,7 +18,8 @@ zarrs = { version = "0.23", features = ["ndarray", "filesystem", "gzip", "blosc"
 serde_json = "1"
 
 # Remote store deps — only compiled with --features remote
+# Uses object_store for both HTTP and S3 (via async-to-sync adapter)
+# No zarrs_http — it pulls in reqwest with native-tls/openssl
 zarrs_object_store = { version = "0.6", optional = true }
-zarrs_http = { version = "0.3", optional = true }
-object_store = { version = "0.13", features = ["http", "aws"], optional = true }
+object_store = { version = "0.13", default-features = false, features = ["http", "aws"], optional = true }
 tokio = { version = "1", features = ["rt-multi-thread"], optional = true }

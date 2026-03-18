@@ -76,15 +76,27 @@ impl ZrStore {
         })
     }
 
-    /// Open a remote HTTP store (read-only, simple GET, no WebDAV).
+    /// Open a remote HTTP store (read-only) via object_store.
+    /// Note: object_store's HTTP backend uses WebDAV PROPFIND for listing,
+    /// which most servers don't support. Use zr_array() directly with known paths.
     fn new_http(url: &str) -> extendr_api::Result<Self> {
         #[cfg(feature = "remote")]
         {
-            let http_store = zarrs_http::HTTPStore::new(url)
+            let runtime = new_tokio_runtime()?;
+
+            let os = object_store::http::HttpBuilder::new()
+                .with_url(url)
+                .build()
                 .map_err(|e| Error::Other(format!("cannot create HTTP store '{}': {}", url, e)))?;
-            let store: ReadableStorage = Arc::new(http_store);
+
+            let async_store = Arc::new(AsyncObjectStore::new(os));
+            let block_on = TokioBlockOn(runtime);
+            let sync_store = Arc::new(
+                AsyncToSyncStorageAdapter::new(async_store, block_on)
+            );
+
             Ok(Self {
-                readable: store,
+                readable: sync_store.clone() as ReadableStorage,
                 writable: None,
                 listable: false,
                 path: url.to_string(),
