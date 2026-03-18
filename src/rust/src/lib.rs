@@ -119,8 +119,19 @@ fn dtype_family(dt: &zarrs::array::DataType) -> &'static str {
 #[extendr]
 impl ZrArray {
     fn open(store: &ZrStore, path: &str) -> extendr_api::Result<Self> {
-        let array = Array::open(store.inner.clone(), path)
-            .map_err(|e| Error::Other(format!("cannot open array '{}': {}", path, e)))?;
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            Array::open(store.inner.clone(), path)
+        }));
+        let array = match result {
+            Ok(Ok(a)) => a,
+            Ok(Err(e)) => return Err(Error::Other(format!("cannot open array '{}': {}", path, e))),
+            Err(panic) => {
+                let msg = if let Some(s) = panic.downcast_ref::<String>() { s.clone() }
+                    else if let Some(s) = panic.downcast_ref::<&str>() { s.to_string() }
+                    else { "unknown panic".to_string() };
+                return Err(Error::Other(format!("zarrs panic opening array '{}': {}", path, msg)));
+            }
+        };
         Ok(Self { inner: array, path: path.to_string() })
     }
 
@@ -449,9 +460,44 @@ fn zr_nodes_inner(store: &ZrStore, path: &str) -> extendr_api::Result<List> {
     use zarrs::node::Node;
     use zarrs::node::NodeMetadata;
 
-    let node = Node::open(&store.inner, path)
-        .map_err(|e| Error::Other(format!("cannot open node '{}': {}", path, e)))?;
-    let children = node.children();
+    // zarrs may panic on malformed stores (V2 edge cases, bare arrays, etc.)
+    // catch_unwind converts panics into errors so R doesn't crash
+    let node_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        Node::open(&store.inner, path)
+    }));
+
+    let node = match node_result {
+        Ok(Ok(n)) => n,
+        Ok(Err(e)) => return Err(Error::Other(format!("cannot open node '{}': {}", path, e))),
+        Err(panic) => {
+            let msg = if let Some(s) = panic.downcast_ref::<&str>() {
+                s.to_string()
+            } else if let Some(s) = panic.downcast_ref::<String>() {
+                s.clone()
+            } else {
+                "unknown panic".to_string()
+            };
+            return Err(Error::Other(format!("zarrs panic opening '{}': {}", path, msg)));
+        }
+    };
+
+    let children_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        node.children()
+    }));
+
+    let children = match children_result {
+        Ok(c) => c,
+        Err(panic) => {
+            let msg = if let Some(s) = panic.downcast_ref::<&str>() {
+                s.to_string()
+            } else if let Some(s) = panic.downcast_ref::<String>() {
+                s.clone()
+            } else {
+                "unknown panic".to_string()
+            };
+            return Err(Error::Other(format!("zarrs panic listing children of '{}': {}", path, msg)));
+        }
+    };
 
     let mut paths: Vec<String> = Vec::new();
     let mut types: Vec<String> = Vec::new();
