@@ -171,25 +171,6 @@ impl std::fmt::Debug for ZrGroup {
 
 #[extendr]
 impl ZrGroup {
-    fn open(store: &ZrStore, path: &str) -> extendr_api::Result<Self> {
-        let group = Group::open(store.readable.clone(), path)
-            .map_err(|e| Error::Other(format!("cannot open group '{}': {}", path, e)))?;
-        Ok(Self { inner: group, path: path.to_string() })
-    }
-
-    fn create(store: &ZrStore, path: &str) -> extendr_api::Result<Self> {
-        let ws = store.writable.as_ref()
-            .ok_or_else(|| Error::Other("store is read-only, cannot create group".to_string()))?;
-        let group = GroupBuilder::new()
-            .build(ws.clone(), path)
-            .map_err(|e| Error::Other(format!("cannot create group '{}': {}", path, e)))?;
-        group.store_metadata()
-            .map_err(|e| Error::Other(format!("cannot store group metadata: {}", e)))?;
-        let group = Group::open(store.readable.clone(), path)
-            .map_err(|e| Error::Other(format!("cannot reopen group '{}': {}", path, e)))?;
-        Ok(Self { inner: group, path: path.to_string() })
-    }
-
     fn attributes_json(&self) -> String {
         serde_json::to_string(self.inner.attributes()).unwrap_or_else(|_| "{}".to_string())
     }
@@ -233,23 +214,6 @@ fn dtype_family(dt: &zarrs::array::DataType) -> Option<&'static str> {
 
 #[extendr]
 impl ZrArray {
-    fn open(store: &ZrStore, path: &str) -> extendr_api::Result<Self> {
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            Array::open(store.readable.clone(), path)
-        }));
-        let array = match result {
-            Ok(Ok(a)) => a,
-            Ok(Err(e)) => return Err(Error::Other(format!("cannot open array '{}': {}", path, e))),
-            Err(panic) => {
-                let msg = if let Some(s) = panic.downcast_ref::<String>() { s.clone() }
-                    else if let Some(s) = panic.downcast_ref::<&str>() { s.to_string() }
-                    else { "unknown panic".to_string() };
-                return Err(Error::Other(format!("zarrs panic opening array '{}': {}", path, msg)));
-            }
-        };
-        Ok(Self { inner: array, path: path.to_string() })
-    }
-
     fn shape(&self) -> Vec<f64> {
         self.inner.shape().iter().map(|&x| x as f64).collect()
     }
@@ -792,6 +756,75 @@ fn zr_zarrs_version() -> String {
 }
 
 // ---------------------------------------------------------------------------
+// Open functions — free functions using throw_r_error to avoid
+// extendr 0.8 bug where Result<Self> on constructor methods panics on Err
+// ---------------------------------------------------------------------------
+
+/// @export
+#[extendr]
+fn zr_open_array(store: &ZrStore, path: &str) -> ZrArray {
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        Array::open(store.readable.clone(), path)
+    }));
+    let array = match result {
+        Ok(Ok(a)) => a,
+        Ok(Err(e)) => {
+            throw_r_error(format!("cannot open array '{}': {}", path, e));
+        }
+        Err(panic) => {
+            let msg = if let Some(s) = panic.downcast_ref::<String>() { s.clone() }
+                else if let Some(s) = panic.downcast_ref::<&str>() { s.to_string() }
+                else { "unknown panic".to_string() };
+            throw_r_error(format!("zarrs panic opening array '{}': {}", path, msg));
+        }
+    };
+    ZrArray { inner: array, path: path.to_string() }
+}
+
+/// @export
+#[extendr]
+fn zr_open_group(store: &ZrStore, path: &str) -> ZrGroup {
+    let group = match Group::open(store.readable.clone(), path) {
+        Ok(g) => g,
+        Err(e) => {
+            throw_r_error(format!("cannot open group '{}': {}", path, e));
+        }
+    };
+    ZrGroup { inner: group, path: path.to_string() }
+}
+
+/// @export
+#[extendr]
+fn zr_create_group_inner(store: &ZrStore, path: &str) -> ZrGroup {
+    let ws = match store.writable.as_ref() {
+        Some(s) => s,
+        None => {
+            throw_r_error("store is read-only, cannot create group");
+        }
+    };
+    let group = match GroupBuilder::new().build(ws.clone(), path) {
+        Ok(g) => g,
+        Err(e) => {
+            throw_r_error(format!("cannot create group '{}': {}", path, e));
+        }
+    };
+    match group.store_metadata() {
+        Ok(()) => {}
+        Err(e) => {
+            throw_r_error(format!("cannot store group metadata: {}", e));
+        }
+    }
+    // Re-open with readable storage
+    let group = match Group::open(store.readable.clone(), path) {
+        Ok(g) => g,
+        Err(e) => {
+            throw_r_error(format!("cannot reopen group '{}': {}", path, e));
+        }
+    };
+    ZrGroup { inner: group, path: path.to_string() }
+}
+
+// ---------------------------------------------------------------------------
 // Module
 // ---------------------------------------------------------------------------
 
@@ -800,6 +833,9 @@ extendr_module! {
     impl ZrStore;
     impl ZrGroup;
     impl ZrArray;
+    fn zr_open_array;
+    fn zr_open_group;
+    fn zr_create_group_inner;
     fn zr_create_array_inner;
     fn zr_write_subset_inner;
     fn zr_write_chunk_inner;

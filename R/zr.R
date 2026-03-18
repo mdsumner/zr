@@ -45,7 +45,7 @@ zr_s3_store <- function(url) {
 #' @return A ZrArray object (external pointer).
 #' @export
 zr_array <- function(store, path) {
-  ZrArray$open(store, path)
+  zr_open_array(store, path)
 }
 
 #' Open or create a Zarr group
@@ -55,7 +55,7 @@ zr_array <- function(store, path) {
 #' @return A ZrGroup object (external pointer).
 #' @export
 zr_group <- function(store, path = "/") {
-  ZrGroup$open(store, path)
+  zr_open_group(store, path)
 }
 
 #' Create a Zarr group and store its metadata
@@ -65,7 +65,7 @@ zr_group <- function(store, path = "/") {
 #' @return A ZrGroup object (external pointer), invisibly.
 #' @export
 zr_create_group <- function(store, path = "/") {
-  invisible(ZrGroup$create(store, path))
+  invisible(zr_create_group_inner(store, path))
 }
 
 #' Array shape

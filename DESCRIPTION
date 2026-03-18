@@ -1,6 +1,6 @@
 Package: zr
 Title: Zarr V2/V3 Arrays via the 'zarrs' Rust Crate
-Version: 0.0.1
+Version: 0.0.2
 Authors@R: person("Michael D.", "Sumner", email = "mdsumner@gmail.com",
                   role = c("aut", "cre"))
 Description: Read and write Zarr V2 and V3 multidimensional arrays using the

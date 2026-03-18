@@ -11,6 +11,15 @@
 NULL
 
 #' @export
+zr_open_array <- function(store, path) .Call(wrap__zr_open_array, store, path)
+
+#' @export
+zr_open_group <- function(store, path) .Call(wrap__zr_open_group, store, path)
+
+#' @export
+zr_create_group_inner <- function(store, path) .Call(wrap__zr_create_group_inner, store, path)
+
+#' @export
 zr_create_array_inner <- function(store, path, shape, chunks, dtype, fill_value, dimension_names, attributes_json) .Call(wrap__zr_create_array_inner, store, path, shape, chunks, dtype, fill_value, dimension_names, attributes_json)
 
 #' @export
@@ -50,10 +59,6 @@ ZrStore$is_listable <- function() .Call(wrap__ZrStore__is_listable, self)
 
 ZrGroup <- new.env(parent = emptyenv())
 
-ZrGroup$open <- function(store, path) .Call(wrap__ZrGroup__open, store, path)
-
-ZrGroup$create <- function(store, path) .Call(wrap__ZrGroup__create, store, path)
-
 ZrGroup$attributes_json <- function() .Call(wrap__ZrGroup__attributes_json, self)
 
 ZrGroup$group_path <- function() .Call(wrap__ZrGroup__group_path, self)
@@ -65,8 +70,6 @@ ZrGroup$group_path <- function() .Call(wrap__ZrGroup__group_path, self)
 `[[.ZrGroup` <- `$.ZrGroup`
 
 ZrArray <- new.env(parent = emptyenv())
-
-ZrArray$open <- function(store, path) .Call(wrap__ZrArray__open, store, path)
 
 ZrArray$shape <- function() .Call(wrap__ZrArray__shape, self)
 
