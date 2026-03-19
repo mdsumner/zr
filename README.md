@@ -4,13 +4,12 @@ Zarr V2/V3 arrays for R, via the [zarrs](https://zarrs.dev/) Rust crate.
 
 ## Features
 
-- Read Zarr V2 and V3 multidimensional arrays from any source
-- Filesystem, HTTP, and S3 stores through a single read path
+- Read Zarr V2 and V3 multidimensional arrays 
+- Filesystem, HTTP, and S3 stores 
 - Local write for testing and prototyping (remote write out of scope)
 - Chunk-level read/write access
-- Proper error handling (no Rust panics into R)
-- 2D reads oriented for `ximage()` / `rasterImage()` (`byrow = TRUE`)
-- Compression: gzip, blosc, zstd, sharding
+
+We've done some limited testing on creating icechunk stores . 
 
 ## Installation
 
@@ -23,7 +22,7 @@ pak::pak("hypertidy/zr")
 
 ## Quick start
 
-### Read from any store
+### Read from  store
 
 ```r
 library(zr)
@@ -71,9 +70,6 @@ All indexing is **0-based** (matching zarr/Python convention).
 
 zr is a thin wrapper — no R6/S4 classes, plain functions with `zr_` prefix,
 extendr external pointers for Rust objects. Remote stores (HTTP, S3) are
-read-only by design. Write-to-local is for testing and prototyping; write-to-remote
-is a data engineering concern better handled in Python.
+read-only by design. Write-to-local is for testing and prototyping. 
 
-## License
 
-Apache License (>= 2)
