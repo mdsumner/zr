@@ -825,6 +825,62 @@ fn zr_create_group_inner(store: &ZrStore, path: &str) -> ZrGroup {
 }
 
 // ---------------------------------------------------------------------------
+// Icechunk store — free function to avoid extendr Result<Self> panic
+// ---------------------------------------------------------------------------
+
+/// @export
+#[extendr]
+fn zr_open_icechunk(path: &str, branch: &str) -> ZrStore {
+    #[cfg(feature = "icechunk")]
+    {
+        use icechunk::{Repository, RepositoryConfig, repository::VersionInfo};
+        use zarrs_icechunk::AsyncIcechunkStore;
+        use std::collections::HashMap;
+
+        let runtime = match new_tokio_runtime() {
+            Ok(r) => r,
+            Err(e) => { throw_r_error(format!("cannot create runtime: {}", e)); }
+        };
+
+        let store_result = runtime.block_on(async {
+            let storage = icechunk::new_local_filesystem_storage(&PathBuf::from(path)).await
+                .map_err(|e| format!("cannot open icechunk storage '{}': {}", path, e))?;
+            let config = RepositoryConfig::default();
+            let repo = Repository::open(Some(config), storage, HashMap::new()).await
+                .map_err(|e| format!("cannot open icechunk repo '{}': {}", path, e))?;
+            let session = repo.readonly_session(
+                &VersionInfo::BranchTipRef(branch.to_string())
+            ).await
+                .map_err(|e| format!("cannot checkout branch '{}': {}", branch, e))?;
+            let store = Arc::new(AsyncIcechunkStore::new(session));
+            Ok::<_, String>(store)
+        });
+
+        let store_result = match store_result {
+            Ok(s) => s,
+            Err(e) => { throw_r_error(e); }
+        };
+
+        let block_on = TokioBlockOn(runtime);
+        let sync_store = Arc::new(
+            AsyncToSyncStorageAdapter::new(store_result, block_on)
+        );
+
+        ZrStore {
+            readable: sync_store.clone() as ReadableStorage,
+            writable: None,
+            listable: false,
+            path: path.to_string(),
+        }
+    }
+    #[cfg(not(feature = "icechunk"))]
+    {
+        let _ = (path, branch);
+        throw_r_error("icechunk stores require the 'icechunk' feature (recompile with ZR_FEATURES=icechunk)");
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Module
 // ---------------------------------------------------------------------------
 
@@ -835,6 +891,7 @@ extendr_module! {
     impl ZrArray;
     fn zr_open_array;
     fn zr_open_group;
+    fn zr_open_icechunk;
     fn zr_create_group_inner;
     fn zr_create_array_inner;
     fn zr_write_subset_inner;

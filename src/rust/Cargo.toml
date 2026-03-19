@@ -10,7 +10,8 @@ name = "zr"
 [features]
 default = ["local"]
 local = []
-remote = ["dep:zarrs_object_store", "dep:object_store", "dep:tokio"]
+remote = ["dep:zarrs_object_store", "dep:object_store", "dep:tokio", "dep:openssl-sys"]
+icechunk = ["remote", "dep:zarrs_icechunk", "dep:icechunk"]
 
 [dependencies]
 extendr-api = "0.8"
@@ -18,8 +19,14 @@ zarrs = { version = "0.23", features = ["ndarray", "filesystem", "gzip", "blosc"
 serde_json = "1"
 
 # Remote store deps — only compiled with --features remote
-# Uses object_store for both HTTP and S3 (via async-to-sync adapter)
-# No zarrs_http — it pulls in reqwest with native-tls/openssl
 zarrs_object_store = { version = "0.6", optional = true }
 object_store = { version = "0.13", default-features = false, features = ["http", "aws"], optional = true }
 tokio = { version = "1", features = ["rt-multi-thread"], optional = true }
+
+# Vendored OpenSSL — compiles a static OpenSSL from source so we don't
+# depend on system OpenSSL (fixes EVP_bf_ecb missing on Ubuntu 22.04 OpenSSL 3.0)
+openssl-sys = { version = "0.9", features = ["vendored"], optional = true }
+
+# Icechunk — virtual zarr stores backed by parquet refs (VirtualiZarr)
+zarrs_icechunk = { version = "0.4", optional = true }
+icechunk = { version = "0.3", optional = true }

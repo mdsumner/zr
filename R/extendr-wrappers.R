@@ -17,6 +17,9 @@ zr_open_array <- function(store, path) .Call(wrap__zr_open_array, store, path)
 zr_open_group <- function(store, path) .Call(wrap__zr_open_group, store, path)
 
 #' @export
+zr_open_icechunk <- function(path, branch) .Call(wrap__zr_open_icechunk, path, branch)
+
+#' @export
 zr_create_group_inner <- function(store, path) .Call(wrap__zr_create_group_inner, store, path)
 
 #' @export

@@ -37,6 +37,20 @@ zr_s3_store <- function(url) {
   ZrStore$new_s3(url)
 }
 
+#' Open an icechunk store
+#'
+#' Opens a read-only icechunk repository, typically created by
+#' VirtualiZarr in Python. The store contains parquet-backed virtual
+#' references to chunks in remote archival formats (NetCDF4, HDF5, etc.).
+#'
+#' @param path Character, path to the icechunk repository directory.
+#' @param branch Character, branch name (default `"main"`).
+#' @return A ZrStore object (external pointer, read-only).
+#' @export
+zr_icechunk_store <- function(path, branch = "main") {
+  zr_open_icechunk(normalizePath(path.expand(path), mustWork = TRUE), branch)
+}
+
 #' Open an existing Zarr array
 #'
 #' @param store A ZrStore (from [zr_store()], [zr_http_store()], or
